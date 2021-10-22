@@ -1,1 +1,5 @@
 # vuegldemo
+
+`npm install`
+
+

@@ -1,0 +1,33 @@
+{
+  "name": "pacman",
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "serve": "vite preview",
+    "build-app": "npm install && npm run build",
+    "serve2": "vue-cli-service serve",
+    "build2": "vue-cli-service build",
+    "build3": "vue-cli-service build --mode production",
+    "lint": "vue-cli-service lint"
+  },
+  "dependencies": {
+    "@vue/cli": "^4.5.13",
+    "dat.gui": "^0.7.7",
+    "install": "^0.13.0",
+    "node": "^16.10.0",
+    "npm": "^8.0.0",
+    "nvm": "^0.0.4",
+    "oimo": "^1.0.9",
+    "three": "^0.133.1",
+    "vue": "^3.2.19",
+    "vue-threejs": "^0.2.0-alpha.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^1.9.2",
+    "@vue/cli-plugin-typescript": "~4.5.0",
+    "typescript": "^4.4.3",
+    "vite": "^2.6.5",
+    "vue-tsc": "^0.3.0"
+  }
+}
