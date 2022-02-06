@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// npm i -g @vue/cli-service-global
 
 import {
   ref,
@@ -9,8 +10,9 @@ import {
   defineComponent,
 } from "vue";
 
-import someImage from "../assets/static/sprites.png";
-import someImage2 from "../assets/static/background1.png";
+import spritesImageFile from "../assets/static/sprites.png";
+import backgroundImageFile from "../assets/static/background1.png";
+import backgroundMaskFile from "../assets/static/backgroundMask.png";
 import soundEffect from "../assets/static/soundeffect1.mp3"
 
 // defineProps<{ score: number }>()
@@ -28,11 +30,11 @@ import soundEffect from "../assets/static/soundeffect1.mp3"
 const hotReloadDetectId = Math.random();
 const canvas_id = "pacman-canvas";
 
-let gl : WebGLRenderingContext;
+let gl: WebGLRenderingContext | null;
 
-const frameUpdateInterval_ms = 25; // 40 per second
+const frameUpdateInterval_ms = 25; // would be 40 per second
 // const frameUpdateInterval_ms = 250.0; // for testing only
-// const frameUpdateInterval_ms = 16; // > enough per second
+// const frameUpdateInterval_ms = 16; // more than enough per second
 
 var lastTimerTick_ms = window.performance.now();
 var startTime2 = (window.performance || Date).now();
@@ -46,68 +48,39 @@ enum ParticleType {
   Tree = 5,
 }
 
+const particleTypeProperties = new Map([
+  [ParticleType.Apple, {edible: true, score:200}]
+//  [ParticleType.Sunglasses, { pickup: true }],
+//  [ParticleType.MegaStuffBox, { sizefactor: 2.0 }],
+//  [ParticleType.MegaStuff, { sizefactor: 2.0, edible: true, score: 1000 }],
+//  [ParticleType.Stuff,     {  edible: true, score: 250 }],
+//  [ParticleType.CylinderStuff, {  edible: true, score: 200 }],
+//  [ParticleType.MegaTree, {sizefactor: 2.0}]
+]);
+
 enum GameState {
   Uninitialized = 0,
   Running = 1,
   Finished = 2,
 }
 
-// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Tutorial/Using_textures_in_WebGL
-function loadTexture(
-  gl: WebGLRenderingContext,
-  url: any,
-  register: number
-): WebGLTexture | null {
-  const texture = gl.createTexture();
-  gl.activeTexture(register);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
+const score_time_decrement = 100; // per second
 
-  const level = 0;
-  const internalFormat = gl.RGBA;
-  const width = 1;
-  const height = 1;
-  const border = 0;
-  const srcFormat = gl.RGBA;
-  const srcType = gl.UNSIGNED_BYTE;
-  const pixel = new Uint8Array([0, 0, 0, 255]); // opaque black
 
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    level,
-    internalFormat,
-    width,
-    height,
-    border,
-    srcFormat,
-    srcType,
-    pixel
-  );
-
-  const image = new Image();
-  image.onload = function () {
-    gl.activeTexture(register);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      level,
-      internalFormat,
-      srcFormat,
-      srcType,
-      image
-    );
-
-    if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
-      gl.generateMipmap(gl.TEXTURE_2D);
-    } else {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    }
-  };
-  image.src = url;
-
-  return texture;
+// https://coderwall.com/p/iyhizq/get-the-pixel-data-of-an-image-in-html
+function prepareHiddenImageCanvas(
+  img: HTMLImageElement
+): CanvasRenderingContext2D | null {
+  var canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height;
+  var context = canvas.getContext("2d");
+  if (context === null) {
+    console.warn("could not create canvas context to read image data.");
+    return null;
+  }
+  context.drawImage(img, 0, 0);
+  return context;
 }
 
 function isPowerOf2(value: number): boolean {
@@ -182,17 +155,14 @@ const theVertexShaderProgram = `
 precision highp float;
 
 attribute vec2 a_position;
-attribute float a_startAngle;
-attribute float a_angularVelocity;
-attribute float a_rotationAxisAngle;
-// attribute float a_particleDistance;
-// attribute float a_particleAngle;
+attribute float a_xyAngle;
 attribute vec3 a_xyz;
 attribute vec2 a_uv;
-attribute float a_particleY;
-
 attribute float a_particleType;
+attribute float a_yzAngle;
+// attribute float a_particleScale;
 
+uniform vec2 u_vantagePoint;
 uniform mediump float u_time; // Global state
 
 varying vec2 v_position;
@@ -206,39 +176,44 @@ varying float v_usetexture;
 uniform lowp float u_gamestate;
 uniform mediump float u_time2; // since gamestate changed
 
-void main() {
-  float angle = a_startAngle + a_angularVelocity * u_time;
+#define PI 3.1415926538
 
-  float vertPosition = a_xyz.z * 1.0;
+void main() {
+  // float angle = a_startAngle + a_angularVelocity * u_time;
+
+  float vertPosition = a_xyz.z*1.0;
+
+  // Adjust overall size of image
+  float antiScale = 0.5;
 
   mat4 vMatrix = mat4(
     1.3, 0.0, 0.0, 0.0,
     0.0, 1.3, 0.0, 0.0,
     0.0, 0.0, 1.0, 1.0,
-    0.0, 0.0, 0.0, 1.0
+    0.0, 0.0, 0.0, antiScale
   );
 
   mat4 shiftMatrix = mat4(
     1.0, 0.0, 0.0, 0.0,
     0.0, 1.0, 0.0, 0.0,
     0.0, 0.0, 1.0, 0.0,
-    a_xyz.x, a_xyz.y, vertPosition, 1.0
+    a_xyz.x - u_vantagePoint.x, a_xyz.y - u_vantagePoint.y, vertPosition, 1.0
     // a_particleDistance * sin(viewAngle), a_particleDistance * cos(viewAngle),  vertPosition, 1.0
   );
 
   mat4 pMatrix = mat4(
-    cos(a_rotationAxisAngle), sin(a_rotationAxisAngle), 0.0, 0.0,
-    -sin(a_rotationAxisAngle), cos(a_rotationAxisAngle), 0.0, 0.0,
+    cos(a_xyAngle), sin(a_xyAngle), 0.0, 0.0,
+    -sin(a_xyAngle), cos(a_xyAngle), 0.0, 0.0,
     0.0, 0.0, 1.0, 0.0,
     0.0, 0.0, 0.0, 1.0
   ) * mat4(
     1.0, 0.0, 0.0, 0.0,
-    0.0, cos(angle), sin(angle), 0.0,
-    0.0, -sin(angle), cos(angle), 0.0,
+    0.0, cos(a_yzAngle), sin(a_yzAngle), 0.0,
+    0.0, -sin(a_yzAngle), cos(a_yzAngle), 0.0,
     0.0, 0.0, 0.0, 1.0
   );
 
-  gl_Position = vMatrix * shiftMatrix * pMatrix * vec4(a_position * 0.13, 0.0, 1.0);
+  gl_Position = vMatrix * shiftMatrix * pMatrix * vec4(a_position * 1.0, 0.0, 1.0);
   vec4 normal = vec4(0.0, 0.0, 1.0, 0.0);
   vec4 transformedNormal = normalize(pMatrix * normal);
 
@@ -283,24 +258,33 @@ const NUM_INDICES = 6;
 
 const attrs = [
   { name: "a_position", length: 2, offset: 0 },
-  { name: "a_startAngle", length: 1, offset: 2 },
-  { name: "a_angularVelocity", length: 1, offset: 3 },
-  { name: "a_rotationAxisAngle", length: 1, offset: 4 },
-  { name: "a_xyz", length: 3, offset: 5 },
-  { name: "a_uv", length: 2, offset: 8 },
-  { name: "a_particleType", length: 1, offset: 10 },
+  { name: "a_xyAngle", length: 1, offset: 2 },
+  { name: "a_xyz", length: 3, offset: 3 },
+  { name: "a_uv", length: 2, offset: 6 },
+  { name: "a_particleType", length: 1, offset: 8 },
+  { name: "a_yzAngle", length: 1, offset: 9 },
+  // { name: "a_particleScale", length: 1, offset: 10 }
 ];
 
-// TODO compute that correctly
-const STRIDE = Object.keys(attrs).length + 4; // simply the sum of the lengths
+function getAttrOffset(name: string) : number {
+  return attrs.filter((x) => x.name==name)[0].offset
+}
 
+const STRIDE = attrs.map((x) => x.length).reduce((x, y) => x + y, 0);
 let vertices = new Float32Array(NUM_PARTICLES * STRIDE * NUM_VERTICES);
 let indices = new Uint16Array(NUM_PARTICLES * NUM_INDICES);
 
 let shaderProgram: WebGLProgram | null = null;
 
-let spritesTexture: any = null;
+let spritesTexture: WebGLTexture | null = null;
+let spritesImage: HTMLImageElement | null = null;
+
 let backgroundTexture: WebGLTexture | null = null;
+let backgroundImage: HTMLImageElement | null = null;
+let backgroundHiddenContextBox = { it: null };
+
+let backgroundMask: HTMLImageElement | null = null;
+let backgroundMaskHiddenContextBox = { it: null };
 
 let NUM_APPLES = 20;
 let gamestate = GameState.Uninitialized;
@@ -313,6 +297,8 @@ export default defineComponent({
       PAC_POSITION: [0.0, 0.0],
       STUFF: new Map() as Map<number, any>,
       GAMESTATE: GameState.Uninitialized,
+      // TODO make a struct encapsulating all game and level info ...
+      INVENTORY: [] as any[],
       score: 0,
       tStart_ms: 0.0,
       finishedAt_ms: 0.0,
@@ -322,7 +308,7 @@ export default defineComponent({
       canvas_width: 768,
       canvas_height: 768,
       gl_context: null as WebGLRenderingContext | null,
-      ODOMETER: 0.0
+      ODOMETER: 0.0,
     };
   },
 
@@ -338,7 +324,7 @@ export default defineComponent({
 
     this.setupAndRenderGL(canvas, this.tStart_ms);
 
-    let listn = function (this: any, e: KeyboardEvent) {
+    let listn = function(this: any, e: KeyboardEvent) {
       this.handleKeypress(e);
       // e.stopImmediatePropagation();
       // this.setupAndRenderGL();
@@ -350,32 +336,198 @@ export default defineComponent({
   },
 
   methods: {
+    // without creating gl texture
+    loadImage(url: any, canvasRenderingContextBox: any): HTMLImageElement {
+      const image = new Image();
+      let that = this;
+
+      image.onload = function(this: GlobalEventHandlers) {
+        // TODO notify somehow -> done
+        // TODO now avoid reInitializing() 3 times
+
+        if (canvasRenderingContextBox !== null) {
+          canvasRenderingContextBox["it"] = prepareHiddenImageCanvas(image);
+          console.log(canvasRenderingContextBox);
+          that?.reInitialize();
+        }
+      };
+      // .bind(this);
+
+      // this?.reInitialize();
+
+      image.src = url;
+
+      return image;
+    },
+
+    // https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Tutorial/Using_textures_in_WebGL
+    loadTexture(
+      gl: WebGLRenderingContext,
+      url: any,
+      register: number,
+      // output parameter (loaded asynchronously - unfortunately)
+      canvasRenderingContextBox: any //  CanvasRenderingContext2D | null,
+    ): [WebGLTexture | null, HTMLImageElement] {
+      const texture = gl.createTexture();
+      gl.activeTexture(register);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+
+      const level = 0;
+      const internalFormat = gl.RGBA;
+      const width = 1;
+      const height = 1;
+      const border = 0;
+      const srcFormat = gl.RGBA;
+      const srcType = gl.UNSIGNED_BYTE;
+      const pixel = new Uint8Array([0, 0, 0, 255]); // opaque black
+
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        level,
+        internalFormat,
+        width,
+        height,
+        border,
+        srcFormat,
+        srcType,
+        pixel
+      );
+
+      const image = new Image();
+
+      let that = this;
+
+      image.onload = function(this: GlobalEventHandlers) {
+
+        gl.activeTexture(register);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          level,
+          internalFormat,
+          srcFormat,
+          srcType,
+          image
+        );
+
+        if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+          gl.generateMipmap(gl.TEXTURE_2D);
+        } else {
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        }
+
+        if (canvasRenderingContextBox !== null) {
+          canvasRenderingContextBox["it"] = prepareHiddenImageCanvas(image);
+          console.log(canvasRenderingContextBox);
+          that?.reInitialize();
+        }
+      };
+      // .bind(this);
+
+      // this?.reInitialize();
+
+      image.src = url;
+
+      return [texture, image];
+    },
+
+
+     random_position(zz:CanvasRenderingContext2D,
+       xmin:number, xmax:number, ymin:number, ymax:number,
+       type1:number, type2?:number) :void {
+
+        var px = (xmax - xmin) * Math.random() + xmin;
+        var py = (ymax - ymin) * Math.random() + ymin;
+
+       {
+        var tries = 0
+        // This actually works:
+          while ((
+            zz.getImageData(
+            Math.floor(backgroundImage!.width *(px-xmin)/(xmax-xmin)),
+            Math.floor(backgroundImage!.height - backgroundImage!.height*(py-ymin)/(ymax-ymin)), 1, 1).
+            data[3] // alpha channel
+            < 255
+               ||
+               Array.from(this.STUFF.values()).filter((thing:any) =>
+               sqdist(thing.pos, [px, py]) < 0.1
+               ).length >= 1
+             )
+            &&
+            tries < 20
+            ) {
+              px = (xmax - xmin) * Math.random() + xmin;
+              py = (ymax - ymin) * Math.random() + ymin;
+              tries += 1;
+          }
+       }
+
+      let j = this.STUFF.size
+
+        this.STUFF.set(j, {
+          pos: [px, py],
+          type: type1,
+          relevant: true,
+          link: type2 == null ? null : j + 1,
+        });
+        if (type2 != null) {
+          j++;
+          this.STUFF.set(j++, { pos: [px, py], type: type2 });
+        }
+      },
+
+    // TODO now it's there
+    // TODO now avoid reInitializing() 3 times
     reInitialize(): void {
       this.DIRECTION = [0.0, 0.0];
       this.PAC_POSITION = [0.0, 0.0];
       this.tStart_ms = window.performance.now();
       this.STUFF = new Map();
+      this.INVENTORY = [];
       this.GAMESTATE = GameState.Running;
-      gamestate = this.GAMESTATE;
+      // gamestate = this.GAMESTATE;
       this.ODOMETER = 0.0;
       this.finishedAt_ms = this.tStart_ms;
       this.reset_score();
       this.reset_game_message();
 
+      if (backgroundMaskHiddenContextBox["it"] === null) {
+        // backgroundHiddenContext = prepareHiddenImageCanvas(backgroundImage);
+        console.error("background image not yet loaded, can't initialize");
+        return;
+        // wait till image is loaded
+      } else {
+        console.warn("it's there");
+      }
+
+      let zz: CanvasRenderingContext2D = backgroundMaskHiddenContextBox["it"];
+
+      // counter for foreground objects to be generated
       let j = 0;
 
       this.STUFF.set(j++, { pos: [0.0, 0.0], type: ParticleType.Background });
 
-      for (let i = 0; i < NUM_APPLES; i++) {
-        let px = 2 * Math.random() - 1;
-        let py = 2 * Math.random() - 1;
+      let bw = backgroundImage?.width ?? 1;
+      let bh = backgroundImage?.height ?? 1;
+      let xmax =
+        this.canvas_width <= bw ? (2.0 * bw) / this.canvas_width - 1.0 : 1.0;
+      let ymax =
+        this.canvas_height <= bh ? (2.0 * bh) / this.canvas_height - 1.0 : 1.0;
+      let ymin = -1.0;
+      let xmin = -1.0;
 
-        this.STUFF.set(j++, {
-          pos: [px, py],
-          type: ParticleType.Apple,
-          // relevant to finish the level?
-          relevant: true,
-        });
+      // TODO how about generating the whole background procedurally?
+      // How much effort can it be? We can use canvas to change an image
+      // -> can use it to modify it or create it from scratch (in 2D, with
+      // paint commands) rather than render into a texture (which would be overkill)
+      // - and algorithmically generate whatever should be shown, and the mask map
+      // for collisions and object placement.
+
+      for (let i = 0; i < NUM_APPLES; i++) {
+        this.random_position(zz, xmin, xmax, ymin, ymax, ParticleType.Apple, null);
       }
 
       this.STUFF.set(j++, { pos: this.PAC_POSITION, type: ParticleType.Ego });
@@ -410,22 +562,50 @@ export default defineComponent({
     },
 
     updateState(): void {
+      if (this.GAMESTATE === GameState.Uninitialized) {
+        return;
+      }
+
       const tLast_ms = lastTimerTick_ms;
       const tNow_ms = window.performance.now();
       const diff_ms = tNow_ms - tLast_ms;
+
+      // decresase the score as time elapses
+      if (tNow_ms % 100 < 50 && tLast_ms % 100 > 50) {
+        if (this.score > 0) {
+          this.add_score(-score_time_decrement/10);
+        }
+      }
 
       if (diff_ms == 0.0) {
         // called too early: ignore
         return;
       }
 
-      if (this.GAMESTATE === GameState.Finished && tNow_ms - this.finishedAt_ms >= 1000) {
-          this.reInitialize();
-          return;
+      if (
+        this.GAMESTATE === GameState.Finished &&
+        tNow_ms - this.finishedAt_ms >= 1000
+      ) {
+        this.reInitialize();
+        return;
       }
 
-      // limit for hitting objects ...
-      let limit = 1.25; // TODO compute this properly from object geometry.
+      // TODO: compute this once when size changes?
+      let bw = backgroundImage?.width ?? 1;
+      let bh = backgroundImage?.height ?? 1;
+      let xmax =
+        this.canvas_width <= bw ? (2.0 * bw) / this.canvas_width - 1.0 : 1.0;
+      let ymax =
+        this.canvas_height <= bh ? (2.0 * bh) / this.canvas_height - 1.0 : 1.0;
+      let ymin = -1.0;
+      let xmin = -1.0;
+
+      // let limit = 1.25;
+      // TODO: for some reason, xmin, xmax, ymin, ymax don't reflect the
+      // position of Ego at borders perfectly. Find out why
+
+      // TODO: read mask image and use that to determine where
+      // walls are <--
 
       if (this.GAMESTATE === GameState.Running) {
         this.PAC_POSITION[0] +=
@@ -433,38 +613,70 @@ export default defineComponent({
         this.PAC_POSITION[1] +=
           this.DIRECTION[1] * 0.001 * this.speed * diff_ms;
 
-        this.ODOMETER += (Math.abs(this.DIRECTION[0]) + Math.abs(this.DIRECTION[1])) * 0.001 * this.speed * diff_ms;
+        this.ODOMETER +=
+          (Math.abs(this.DIRECTION[0]) + Math.abs(this.DIRECTION[1])) *
+          0.001 *
+          this.speed *
+          diff_ms;
         this.$emit("setOdometer", this.ODOMETER);
 
-        if (this.PAC_POSITION[1] > limit && this.DIRECTION[1] > 0.0)
-          this.PAC_POSITION[1] = -limit;
-        if (this.PAC_POSITION[1] < -limit && this.DIRECTION[1] < 0.0)
-          this.PAC_POSITION[1] = +limit;
-        if (this.PAC_POSITION[0] > limit && this.DIRECTION[0] > 0.0)
-          this.PAC_POSITION[0] = -limit;
-        if (this.PAC_POSITION[0] < -limit && this.DIRECTION[0] < 0.0)
-          this.PAC_POSITION[0] = +limit;
+        // console.log(this.PAC_POSITION)
 
-        // TODO optimize
+        // Wraparound
+        if (this.PAC_POSITION[1] > ymax && this.DIRECTION[1] > 0.0)
+          this.PAC_POSITION[1] = ymin;
+        if (this.PAC_POSITION[1] < ymin && this.DIRECTION[1] < 0.0)
+          this.PAC_POSITION[1] = ymax;
+        if (this.PAC_POSITION[0] > xmax && this.DIRECTION[0] > 0.0)
+          this.PAC_POSITION[0] = xmin;
+        if (this.PAC_POSITION[0] < xmin && this.DIRECTION[0] < 0.0)
+          this.PAC_POSITION[0] = xmax;
+
+        // TODO optimize!!!
         this.STUFF.forEach((value, key) => {
           if (value["disabled"]) {
-            return;
+            return; // ignore this element
           }
-          if (value["type"] == ParticleType.Apple) {
-            let sq = sqdist(this.PAC_POSITION, value["pos"]);
 
-            // TODO this was determined by trial and error.
-            // Detecting collisions would be a big step towards a proper game engine
-            if (Math.sqrt(sq) <= 0.08) {
+          let ptprops = particleTypeProperties.get(value["type"]);
+          let ptscale = ptprops?.sizefactor ?? 1.0
+
+          if (ptprops?.pickup) {
+            let sq = sqdist(this.PAC_POSITION,
+                            value["pos"]);
+            if (Math.sqrt(sq) <= ptscale*0.08) {
+              // console.log("pickup")
               value["disabled"] = true;
+              this.INVENTORY.push({ type: value["type"] });
+            }
+          } else if (ptprops?.edible) {
+            // TODO this isn't the center!
+            // we really want intersection with bounding box or something more precise
+            let sq = sqdist(this.PAC_POSITION,
+                             value["pos"]
+                             );
 
-              this.add_score(200); // TODO depending on kind of object
+            // TODO determine apparent radius! ~ this seems OK for now
+            // limit for hitting objects ...
+            // TODO compute this properly from object geometry.
+            if (Math.sqrt(sq) <= ptscale*0.08) {
+              value["disabled"] = true;
+              if (value["link"] != null) {
+                this.STUFF.get(value["link"])["disabled"] = true;
+              }
 
-              // tree probability
+              this.add_score(ptprops?.score);
+
+              // tree probability: a tree every time
               if (Math.random() <= 1.0) {
                 value["disabled"] = false;
-                value["type"] = ParticleType.Tree;
+                value["type"] =
+//                   value["type"] == ParticleType.MegaStuff ? ParticleType.MegaTree :
+                   ParticleType.Tree;
+                // valid subtypes are 1,2,3
+                value["subtype"] = 1 + Math.floor(Math.random() * 3);
                 value["relevant"] = false;
+                // value["sizefactor"] = value[""]
               }
             }
           }
@@ -473,13 +685,17 @@ export default defineComponent({
 
       if (this.GAMESTATE === GameState.Running && this.checkFinished()) {
         this.GAMESTATE = GameState.Finished;
-        gamestate = this.GAMESTATE;
+        // gamestate = this.GAMESTATE;
         this.finishedAt_ms = window.performance.now();
         startTime2 = (window.performance || Date).now();
         this.$emit("setGameMessage", "yay!");
         var audio = new Audio(soundEffect);
         audio.play();
       }
+
+      // TODO animation when they disappear
+      // TODO either a mask image for placement, or build the background programmatically
+      // from tiles and a scene description language (much better ...)
 
       let canvas = document.getElementById(canvas_id);
       if (canvas instanceof HTMLCanvasElement) {
@@ -561,7 +777,6 @@ export default defineComponent({
               timer = setTimeout(myTimer, frameUpdateInterval_ms);
             } else {
               // console.log(`${child.id} <-> ${hcdi} hot reload detected, cleaning up`);
-
               window.removeEventListener("keydown", listn);
               self.clearTimers();
             }
@@ -603,11 +818,25 @@ export default defineComponent({
 
     setupGL(gl: any): WebGLProgram | null {
       if (spritesTexture === null) {
-        spritesTexture = loadTexture(gl, someImage, gl.TEXTURE0);
+
+        console.log("trying to load spritesTexture");
+
+        [spritesTexture, spritesImage] = this.loadTexture(
+          gl,
+          spritesImageFile,
+          gl.TEXTURE0,
+          null
+        );
       }
       if (backgroundTexture === null) {
-        backgroundTexture = loadTexture(gl, someImage2, gl.TEXTURE1);
-        // backgroundTexture = makeTexture(gl, gl.TEXTURE1, this.canvas_width, this.canvas_height)
+        [backgroundTexture, backgroundImage] = this.loadTexture(
+          gl,
+          backgroundImageFile,
+          gl.TEXTURE1,
+          backgroundHiddenContextBox
+        );
+        // also load background mask (nothing to do with GL)
+        backgroundMask = this.loadImage(backgroundMaskFile, backgroundMaskHiddenContextBox);
       }
 
       if (gl === null) {
@@ -645,8 +874,7 @@ export default defineComponent({
 
       const shaderProgram = gl.createProgram();
       if (shaderProgram === null) {
-        this.errormsg = "could not compile shader program";
-        // TODO show compile errors
+        this.errormsg = "could not create shader program";
         return null;
       }
 
@@ -666,17 +894,11 @@ export default defineComponent({
 
       gl = canvas.getContext("webgl");
 
-      // is this any good!?
-      // if (gl !== this.gl_context) {
-      //  shaderProgram = null;
-      //  this.gl_context = gl;
-      //  // start anew. ?
-      // }
 
       // let's try this solution:
       // https://stackoverflow.com/a/61023200
       canvas.addEventListener("webglcontextlost", (e) => {
-          e.preventDefault();  // allows the context to be restored
+        e.preventDefault(); // allows the context to be restored
       });
       canvas.addEventListener("webglcontextrestored", (e) => {
         this.setupGL(gl);
@@ -705,6 +927,7 @@ export default defineComponent({
         const offset = attrs[i].offset;
 
         const attribLocation = gl.getAttribLocation(shaderProgram, name);
+
         if (attribLocation == -1) {
           console.error(
             "name does not correspond to an attribute location in the shader program: " +
@@ -723,6 +946,7 @@ export default defineComponent({
         gl.enableVertexAttribArray(attribLocation);
       }
 
+      // Then on this line they are bound to an array in memory:
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
 
       // Compute particle parameters to visualize scene
@@ -735,10 +959,14 @@ export default defineComponent({
 
         // console.log(`${i} -> ${this.STUFF[i]}`)
 
+        // select the sprite to be displayed at this location
+        // const shape = 0; // -> particleType
+
         let axisAngle = 0.0; // Math.random() * Math.PI * 2;
-        const startAngle = 0.0; // Math.random() * Math.PI * 2;
+        let yzAngle = 0.0;
         const groupPtr = i * STRIDE * NUM_VERTICES;
 
+        // const particleDistance = Math.random();
         const angularVelocity = 1.0;
 
         let px = this.STUFF.get(i)["pos"][0];
@@ -754,69 +982,100 @@ export default defineComponent({
         let particleType = disabled
           ? ParticleType.Ignore
           : this.STUFF.get(i)["type"];
+        let sizefactor = particleTypeProperties.get(particleType)?.sizefactor ?? 1
 
         if (particleType == ParticleType.Background) {
           px = 0.0;
           py = 0.0;
           pz = 1.0;
         }
-        if (particleType == ParticleType.Ego) {
+        else if (particleType == ParticleType.Ego) {
           py = this.PAC_POSITION[1];
           px = this.PAC_POSITION[0];
           pz = 0.9998; // 1.0-2*1e-5;
           axisAngle = Math.atan2(this.DIRECTION[1], this.DIRECTION[0]);
-        } else {
+        }
+        else if (particleType == ParticleType.Stuff
+        || particleType == ParticleType.StuffBox
+        || particleType == ParticleType.MegaStuff
+        || particleType == ParticleType.MegaStuffBox
+        || particleType == ParticleType.Tree
+        || particleType == ParticleType.MegaTree
+        ) {
+          // Aufrichten:
+          // yzAngle = -.5
+        }
+         else {
           //
         }
 
+        // ALl 4 vertices get the same attributes in these slots
         for (let j = 0; j < 4; j++) {
           const vertexPtr = groupPtr + j * STRIDE;
-          vertices[vertexPtr + 2] = startAngle;
-          vertices[vertexPtr + 3] = angularVelocity;
-          vertices[vertexPtr + 4] = axisAngle;
+
+          vertices[vertexPtr + getAttrOffset("a_xyAngle")] = axisAngle;
+          vertices[vertexPtr + getAttrOffset("a_yzAngle")] = yzAngle;
 
           if (this.istep == 0 || particleType == ParticleType.Ego) {
-            vertices[vertexPtr + 5] = px;
-            vertices[vertexPtr + 6] = py;
-            vertices[vertexPtr + 7] = pz;
+            vertices[vertexPtr + 3] = px;
+            vertices[vertexPtr + 4] = py;
+            vertices[vertexPtr + 5] = pz;
           }
 
           // ParticleType
-          vertices[vertexPtr + 10] = particleType;
+          vertices[vertexPtr + getAttrOffset("a_particleType")] = particleType;
         }
 
-        let xbase = -1;
-        let ybase = -1;
-        let xstep = 2;
-        let ystep = 2;
+        // assuming the visible portion of the plane is 20x the width of one item
+        let SQUARE_WIDTH = 64;
+        let SQUARE_HEIGHT = 64;
+        // let xk = -SQUARE_WIDTH / (backgroundImage?.width ?? this.canvas_width)
+        let xk = SQUARE_WIDTH / this.canvas_width;
+        let yk = SQUARE_HEIGHT / this.canvas_height;
+
+        let xbase = -xk;
+        let ybase = -yk;
+        let xstep = 2 * xk;
+        let ystep = 2 * yk;
 
         // Coordinates on 2D scene prior to transformation
         // x,y, x,y, x,y, x,y
+
+        // TODO wo kamen nun diese Zahlen her? -> jetzt ist es klar. der hintergrund ist exakt so groß
+        // Im Shaderprogramm a_position skalieren, um es größer oder kleiner zu machen insgesamt -
+        // oder mit z weiter weg rücken.
         if (particleType == ParticleType.Background) {
-          xbase = -10;
-          ybase = -10;
-          xstep = 20;
-          ystep = 20;
+          xbase = -1;
+          ybase = -1;
+          xstep = 2;
+          ystep = 2;
+
+          let bw = backgroundImage?.width ?? 1;
+          let bh = backgroundImage?.height ?? 1;
+          // if (canvas.width <= bw) {
+          xstep = (2.0 * bw) / this.canvas_width;
+          // }
+          // if (canvas.height <= bh) {
+          ystep = (2.0 * bh) / this.canvas_height;
+          // }
         }
-        vertices[groupPtr] = xbase;
-        vertices[groupPtr + 1] = ybase;
-        vertices[groupPtr + STRIDE] = xbase + xstep;
-        vertices[groupPtr + STRIDE + 1] = ybase;
-        vertices[groupPtr + STRIDE * 2] = xbase;
-        vertices[groupPtr + STRIDE * 2 + 1] = ybase + ystep;
-        vertices[groupPtr + STRIDE * 3] = xbase + xstep;
-        vertices[groupPtr + STRIDE * 3 + 1] = ybase + ystep;
+
+
+        xstep *= sizefactor;
+        ystep *= sizefactor;
 
         let ubase = 0;
         let vbase = 0;
 
-        // TODO read image dimensions from image?
-        let ustep = 64 / 256;
-        let vstep = ustep;
+        let ustep = SQUARE_WIDTH / (spritesImage?.width ?? 256);
+        let vstep = SQUARE_HEIGHT / (spritesImage?.height ?? 256);
 
+        // TODO clean up logic, this is very ugly and all mixed up
+        // -> define display properties somewhere
+        // for every object, in a struct -> ok
         if (particleType == ParticleType.Ego) {
           if (Math.floor((tNow_ms - this.tStart_ms) / 500.0) % 2 == 0) {
-            vbase = 1 * ustep;
+            vbase = 1 * vstep;
           }
         } else if (particleType == ParticleType.Tree) {
           ubase = 3 * ustep;
@@ -829,15 +1088,33 @@ export default defineComponent({
           vstep = 1;
         }
 
+        // TODO just for fun: toggle 3D view somewhere
+
+        // nope, depends
+        if (particleType != ParticleType.MegaTree) {
+         ustep *= sizefactor;
+         vstep *= sizefactor;
+        }
+
+        // x,y
+        vertices[groupPtr] = xbase;
+        vertices[groupPtr + 1] = ybase;
+        vertices[groupPtr + STRIDE] = xbase + xstep;
+        vertices[groupPtr + STRIDE + 1] = ybase;
+        vertices[groupPtr + STRIDE * 2] = xbase;
+        vertices[groupPtr + STRIDE * 2 + 1] = ybase + ystep;
+        vertices[groupPtr + STRIDE * 3] = xbase + xstep;
+        vertices[groupPtr + STRIDE * 3 + 1] = ybase + ystep;
+
         // texture coordinates u, v
-        vertices[groupPtr + 8] = ubase;
-        vertices[groupPtr + 9] = vbase + vstep;
-        vertices[groupPtr + 8 + STRIDE] = ubase + ustep;
-        vertices[groupPtr + 9 + STRIDE] = vbase + vstep;
-        vertices[groupPtr + 8 + STRIDE * 2] = ubase;
-        vertices[groupPtr + 9 + STRIDE * 2] = vbase;
-        vertices[groupPtr + 8 + STRIDE * 3] = ubase + ustep;
-        vertices[groupPtr + 9 + STRIDE * 3] = vbase;
+        vertices[groupPtr + 6] = ubase;
+        vertices[groupPtr + 7] = vbase + vstep;
+        vertices[groupPtr + 6 + STRIDE] = ubase + ustep;
+        vertices[groupPtr + 7 + STRIDE] = vbase + vstep;
+        vertices[groupPtr + 6 + STRIDE * 2] = ubase;
+        vertices[groupPtr + 7 + STRIDE * 2] = vbase;
+        vertices[groupPtr + 6 + STRIDE * 3] = ubase + ustep;
+        vertices[groupPtr + 7 + STRIDE * 3] = vbase;
 
         const indicesPtr = i * NUM_INDICES;
         const vertexPtr = i * NUM_VERTICES;
@@ -864,6 +1141,10 @@ export default defineComponent({
 
       const startTime = (window.performance || Date).now();
 
+      const vantagePointUniformLocation = gl.getUniformLocation(
+        shaderProgram,
+        "u_vantagePoint"
+      );
       const timeUniformLocation = gl.getUniformLocation(
         shaderProgram,
         "u_time"
@@ -901,35 +1182,51 @@ export default defineComponent({
       // https://webglfundamentals.org/webgl/lessons/webgl-anti-patterns.html
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 
-      // Finish computing the frame:
-      function frame() {
-        if (gl === null) {
-          return;
-        }
-        gl.uniform1f(
-          timeUniformLocation,
-          ((window.performance || Date).now() - startTime) / 1000
-        );
-        gl.uniform1f(
-          time2UniformLocation,
-          ((window.performance || Date).now() - startTime2) / 1000
-        );
-        // "this" not available in this closure
-        gl.uniform1f(
-          gamestateUniformLocation,
-          gamestate,
-        )
+      let vpx = this.PAC_POSITION[0];
+      let vpy = this.PAC_POSITION[1];
 
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.drawElements(
-          gl.TRIANGLES,
-          NUM_INDICES * NUM_PARTICLES,
-          gl.UNSIGNED_SHORT,
-          0
-        );
+      let bw = backgroundImage?.width ?? 1;
+      let bh = backgroundImage?.height ?? 1;
+      let xmax =
+        canvas.width <= bw ? (2.0 * bw) / this.canvas_width - 1.0 : 1.0;
+      let ymax =
+        canvas.height <= bh ? (2.0 * bh) / this.canvas_height - 1.0 : 1.0;
+
+      // TODO limit this effect at the borders
+      if (this.PAC_POSITION[0] < 0.0) {
+        vpx = 0.0;
+      }
+      if (this.PAC_POSITION[1] < 0.0) {
+        vpy = 0.0;
+      }
+      if (this.PAC_POSITION[0] > xmax - 1.0) {
+        vpx = xmax - 1.0;
+      }
+      if (this.PAC_POSITION[1] > ymax - 1.0) {
+        vpy = ymax - 1.0;
       }
 
-      frame();
+      let vpXy = [vpx, vpy];
+      // frame(this, [vpx, vpy]);
+      gl.uniform2f(vantagePointUniformLocation, vpXy[0], vpXy[1]);
+      gl.uniform1f(
+        timeUniformLocation,
+        ((window.performance || Date).now() - startTime) / 1000
+      );
+      gl.uniform1f(
+        time2UniformLocation,
+        ((window.performance || Date).now() - startTime2) / 1000
+      );
+      // "this" not available in this closure
+      gl.uniform1f(gamestateUniformLocation, this.GAMESTATE);
+
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawElements(
+        gl.TRIANGLES,
+        NUM_INDICES * NUM_PARTICLES,
+        gl.UNSIGNED_SHORT,
+        0
+      );
 
       if (canvas.parentElement === null) {
         document.body.appendChild(canvas);
@@ -941,5 +1238,4 @@ export default defineComponent({
 });
 </script>
 
-<style scoped>
-</style>
+<style scoped></style>

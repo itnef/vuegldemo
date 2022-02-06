@@ -16,7 +16,6 @@ defineProps<{ msg: string
                   @setGameMessage="setGameMessage($event)" />
     <div id="overlayL">
       <div>Eat Apples and Plant Trees!<br/>
-Use cursor keys or numpad. Press space to halt, 0 to restart
       </div>
     </div>
     <div id="overlayR">
@@ -28,6 +27,13 @@ Use cursor keys or numpad. Press space to halt, 0 to restart
         <span id="odometer">{{ odometer.toFixed(2) }}</span>
       </div>
     </div>
+    <div id="overlayUL">
+      <div>(Link zur Website)</div>
+    </div>
+    <div id="overlayUR">
+      Use cursor keys or numpad. Press space to halt, 0 to restart
+    </div>
+
     <div id="overlayM">
       <span id="centralMessage" class="centralMessage">
         {{ gameMessage }}
@@ -39,6 +45,7 @@ Use cursor keys or numpad. Press space to halt, 0 to restart
 <script lang="ts">
 
 export default {
+
     data() {
         return {
           score: 0,
@@ -59,6 +66,7 @@ export default {
       }
     },
 
+
     mounted() {
     }
 }
@@ -67,6 +75,7 @@ export default {
 <!-- https://www.w3.org/Style/Examples/007/center.en.html -->
 
 <style scoped>
+
 .container {
   outline: dashed 1px black;
   position: absolute;
@@ -98,11 +107,31 @@ export default {
   color: yellowgreen;
   text-align: left;
 }
+#overlayUL {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  color: white;
+  text-align: left;
+}
+#overlayUR {
+  position: absolute;
+  left: 512px;
+  bottom: 10px;
+  color: white;
+  text-align: left;
+}
 #overlayM {
   position: relative;
   /* center it on the canvas! */
   margin: auto auto;
   text-align: center;
-  
+}
+a {
+  color: yellowgreen;
+  text-shadow: 2px 2px 8px cyan;
+}
+.red {
+  color: red;
 }
 </style>
